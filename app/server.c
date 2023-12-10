@@ -6,8 +6,79 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <pthread.h>
 
-int main() {
+#define MAX_THREADS 5
+
+typedef struct
+{
+	int client_fd;
+} Task;
+
+typedef struct
+{
+	pthread_t thread;
+	int is_active;
+	int server_fd;
+	struct sockaddr_in client_addr;
+	int client_addr_len;
+} ThreadInfo;
+
+void *handle_client(void *arg)
+{
+	Task *task = (Task *)arg;
+	int client_fd = task->client_fd;
+
+	free(task);
+
+	int is_connected = 1;
+
+	while (is_connected)
+	{
+		char request[1024];
+		int byte_read = read(client_fd, request, 1024);
+
+		if (byte_read <= 0)
+		{
+			is_connected = 0;
+			break;
+		}
+
+		printf("Request: %s\n", request);
+
+		char response[1024] = "+PONG\r\n";
+		write(client_fd, response, strlen(response));
+	}
+
+	printf("Client disconnected\n");
+	close(client_fd);
+	return NULL;
+}
+
+void *thread_function(void *arg)
+{
+	ThreadInfo *thread_info = (ThreadInfo *)arg;
+
+	while (thread_info->is_active)
+	{
+		Task *task = (Task *)malloc(sizeof(Task));
+
+		task->client_fd = accept(thread_info->server_fd, (struct sockaddr *)&thread_info->client_addr, &thread_info->client_addr_len);
+
+		if (task->client_fd == -1)
+		{
+			printf("Accept failed: %s \n", strerror(errno));
+			return 1;
+		}
+
+		handle_client(task);
+	}
+
+	return NULL;
+}
+
+int main()
+{
 	// Disable output buffering
 	setbuf(stdout, NULL);
 
@@ -54,30 +125,39 @@ int main() {
 		return 1;
 	}
 
-	printf("Waiting for a client to connect...\n");
-	client_addr_len = sizeof(client_addr);
+	ThreadInfo thread_info[MAX_THREADS];
 
-	int conn = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-	printf("Client connected\n");
-
-	while (conn != -1)
+	for (int i = 0; i < MAX_THREADS; i++)
 	{
-		// Read the request
-		char request[1024];
-		read(conn, request, 1024);
+		thread_info[i].is_active = 1;
+		thread_info[i].server_fd = server_fd;
+		thread_info[i].client_addr_len = sizeof(thread_info[i].client_addr);
 
-		printf("Request: %s\n", request);
-
-		// Send the response
-		char response[1024] = "+PONG\r\n";
-		write(conn, response, strlen(response));
+		pthread_create(&thread_info[i].thread, NULL, thread_function, &thread_info[i]);
 	}
 
-	printf("Client disconnected\n");
-	close(conn);
+	while (1)
+	{
+		int clint_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+		if (clint_fd == -1)
+		{
+			printf("Accept failed: %s \n", strerror(errno));
+			return 1;
+		}
 
-	printf("Waiting for a client to connect...\n");
-	conn = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+		Task *task = (Task *)malloc(sizeof(Task));
+		task->client_fd = clint_fd;
 
-	return 0;
+		for (int i = 0; i < MAX_THREADS; i++)
+		{
+			if (thread_info[i].is_active == 1)
+			{
+				thread_info[i].is_active = 1;
+				thread_info[i].client_addr = client_addr;
+				thread_info[i].client_addr_len = client_addr_len;
+				pthread_create(&thread_info[i].thread, NULL, thread_function, &thread_info[i]);
+				break;
+			}
+		}
+	}
 }
