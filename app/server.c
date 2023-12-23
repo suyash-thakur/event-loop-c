@@ -101,6 +101,7 @@ void *handle_client(void *arg)
 	{
 
 		bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
+		printf("Received %d bytes\n", bytes_read);
 		if (bytes_read <= 0)
 		{
 			// Connection closed or error
@@ -111,7 +112,7 @@ void *handle_client(void *arg)
 
 		send(client_fd, response, strlen(response), 0);
 	}
-
+	printf("Closing connection\n");
 	close(client_fd);
 	return NULL;
 }
