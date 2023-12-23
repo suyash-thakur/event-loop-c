@@ -12,24 +12,18 @@
 
 typedef struct
 {
-	int client_fd;
-} Task;
-
-typedef struct
-{
 	pthread_t thread;
 	int is_active;
-	int server_fd;
+	int client_fd;
 	struct sockaddr_in client_addr;
 	int client_addr_len;
 } ThreadInfo;
 
 void *handle_client(void *arg)
 {
-	Task *task = (Task *)arg;
-	int client_fd = task->client_fd;
-
-	free(task);
+	printf("Handling client\n");
+	ThreadInfo *thread_info = (ThreadInfo *)arg;
+	int client_fd = thread_info->client_fd;
 
 	int is_connected = 1;
 
@@ -58,39 +52,80 @@ void *handle_client(void *arg)
 	return NULL;
 }
 
-void *thread_function(void *arg)
+void *event_loop(void *arg)
 {
-	ThreadInfo *thread_info = (ThreadInfo *)arg;
+	int server_fd = *((int *)arg);
+	fd_set read_fds;
+	int max_fd = server_fd;
 
-	while (thread_info->is_active)
+	ThreadInfo thread_info[MAX_THREADS] = {0};
+
+	while (1)
 	{
-		Task *task = (Task *)malloc(sizeof(Task));
-		if (task == NULL)
+		FD_ZERO(&read_fds);
+		FD_SET(server_fd, &read_fds);
+
+		for (int i = 0; i < MAX_THREADS; i++)
 		{
-			perror("malloc");
+			if (thread_info[i].is_active)
+			{
+				FD_SET(thread_info[i].client_fd, &read_fds);
+				if (thread_info[i].client_fd > max_fd)
+				{
+					max_fd = thread_info[i].client_fd;
+				}
+			}
+		}
+
+		int activity = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+		if ((activity < 0) && (errno != EINTR))
+		{
+			perror("select");
 			exit(EXIT_FAILURE);
 		}
 
-		task->client_fd = accept(thread_info->server_fd, (struct sockaddr *)&thread_info->client_addr, &thread_info->client_addr_len);
-		if (task->client_fd == -1)
+		if (FD_ISSET(server_fd, &read_fds))
 		{
-			perror("accept");
-			free(task);
-			continue;
+			socklen_t addr_len = sizeof(thread_info[0].client_addr);
+			int client_fd = accept(server_fd, (struct sockaddr *)&thread_info[0].client_addr, &addr_len);
+			if (client_fd < 0)
+			{
+				perror("accept");
+				exit(EXIT_FAILURE);
+			}
+
+			for (int i = 0; i < MAX_THREADS; i++)
+			{
+				if (!thread_info[i].is_active)
+				{
+					thread_info[i].is_active = 1;
+					thread_info[i].client_fd = client_fd;
+					thread_info[i].client_addr = thread_info[0].client_addr;
+					thread_info[i].client_addr_len = sizeof(thread_info[0].client_addr);
+					printf("New connection, assigned to thread %d\n", i);
+					pthread_create(&thread_info[i].thread, NULL, handle_client, &thread_info[i]);
+					break;
+				}
+			}
 		}
 
-		handle_client(task);
+		for (int i = 0; i < MAX_THREADS; i++)
+		{
+			if (thread_info[i].is_active && FD_ISSET(thread_info[i].client_fd, &read_fds))
+			{
+				pthread_join(thread_info[i].thread, NULL); // Wait for thread to finish
+				printf("Handling client in thread %d completed\n", i);
+				thread_info[i].is_active = 0;
+				thread_info[i].client_fd = 0;
+			}
+		}
 	}
-
-	return NULL;
 }
 
 int main()
 {
-	// Disable output buffering
 	setbuf(stdout, NULL);
 
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	printf("Logs from your program will appear here!\n");
 
 	int server_fd;
@@ -127,20 +162,10 @@ int main()
 		exit(EXIT_FAILURE);
 	}
 
-	ThreadInfo thread_info[MAX_THREADS] = {0};
+	pthread_t event_loop_thread;
+	pthread_create(&event_loop_thread, NULL, event_loop, &server_fd);
 
-	for (int i = 0; i < MAX_THREADS; i++)
-	{
-		thread_info[i].is_active = 1;
-		thread_info[i].server_fd = server_fd;
-		pthread_create(&thread_info[i].thread, NULL, thread_function, &thread_info[i]);
-	}
-
-	// Wait for threads to finish
-	for (int i = 0; i < MAX_THREADS; i++)
-	{
-		pthread_join(thread_info[i].thread, NULL);
-	}
+	pthread_join(event_loop_thread, NULL);
 
 	close(server_fd);
 
