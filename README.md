@@ -1,5 +1,5 @@
-# Server Application in C
-This is a multithreaded server application written in C. It uses the POSIX threads (pthreads) library to handle multiple client connections concurrently.
+# Event Loop in C
+This is a multithreaded server event-loop based application written in C. It uses the POSIX threads (pthreads) library to handle multiple client connections concurrently.
 
 ## Concepts
 
